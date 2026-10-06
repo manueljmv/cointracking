@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text.Json.Nodes;
 using ModelContextProtocol.Server;
 using ToonFormat;
 
@@ -7,9 +8,23 @@ namespace cointracking;
 [McpServerToolType]
 public sealed class CoinTrackingTools(CoinTrackingClient client)
 {
-    [McpServerTool(Name = "get_balance"), Description("Current holdings per currency with fiat and BTC values")]
-    public Task<string> GetBalance(CancellationToken ct) =>
-        Run("getBalance", Params(), ct);
+    private const decimal MinValueFiat = 1m;
+
+    [McpServerTool(Name = "get_balance"), Description("Current holdings per currency with fiat and BTC values, omitting dust balances")]
+    public async Task<string> GetBalance(CancellationToken ct)
+    {
+        var root = JsonNode.Parse((await client.CallAsync("getBalance", Params(), ct)).GetRawText())!;
+        if (root["details"] is JsonObject details)
+        {
+            var dust = details
+                .Where(d => (d.Value?["value_fiat"]?.GetValue<decimal>() ?? 0m) < MinValueFiat)
+                .Select(d => d.Key)
+                .ToList();
+            foreach (var coin in dust)
+                details.Remove(coin);
+        }
+        return Toon.Encode(root);
+    }
 
     [McpServerTool(Name = "get_trades"), Description("List trades, optionally filtered by unix timestamp range")]
     public Task<string> GetTrades(
